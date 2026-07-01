@@ -133,7 +133,7 @@ class CSPlayerScraper:
             
         # 转换为DataFrame并保存为Excel
         df = pd.DataFrame(player_details)
-        excel_filename = "cs_player_Pro.xlsx"
+        excel_filename = "cs_player_pro.xlsx"
         df.to_excel(excel_filename, index=False)
         print(f"数据已保存到: {excel_filename}")
         print(f"共保存 {len(player_details)} 名选手的详细信息")

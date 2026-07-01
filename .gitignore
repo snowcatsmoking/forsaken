@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 数据备份 / 临时抓包
+*.bak
+*.har
+
+# 开发工具 / 编辑器
+.vscode/
+.idea/
+.DS_Store
+
+# Claude / 本地调试笔记
+.claude/
+BUG_REPORT.md
