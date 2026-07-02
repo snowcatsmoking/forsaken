@@ -1,9 +1,15 @@
 (() => {
-  window.__strikleContentScriptVersion = "2.1.0";
+  window.__strikleContentScriptVersion = "3.0.0";
 
   // ws_hook.js 现在由 manifest 以 world:"MAIN" + run_at:"document_start"
   // 原生注入到页面上下文，既绕开了页面CSP对 chrome-extension: 脚本的拦截，
   // 又由浏览器保证在页面自身脚本创建WebSocket之前完成hook（消除注入时机竞态）。
+  //
+  // 注意：manifest 的 matches 同时覆盖大厅页 /multiplayer 和房间页 /multiplayer/*。
+  // 原因：从大厅「创建房间」是 SPA 客户端路由跳转（pushState，无文档重载），
+  // content script 不会二次注入；只匹配 /multiplayer/* 会导致「自己建房→加入」时
+  // 插件不出现、必须刷新。让脚本在大厅页就注入，WebSocket hook 提前就位，
+  // 之后 SPA 跳进房间新建的游戏连接依然会被 hook 捕获。
 
   let analyzer = null;
   let pendingState = null;
@@ -28,8 +34,8 @@
   panel.id = "strikle-helper-panel";
   panel.innerHTML = `
     <div id="strikle-helper-header">
-      <span id="strikle-helper-logo">弗</span>
-      <span id="strikle-helper-title">弗一把助手</span>
+      <img id="strikle-helper-logo" src="${chrome.runtime.getURL("icon.png")}" alt="玩机器 machine" />
+      <span id="strikle-helper-title">弗一把小助手</span>
       <button id="strikle-helper-collapse" title="折叠 / 展开">–</button>
     </div>
     <div id="strikle-helper-mode-switch">
@@ -44,6 +50,17 @@
       <div class="strikle-row-label">建议猜测</div>
       <div id="strikle-helper-suggestion" class="strikle-idle">-</div>
       <div id="strikle-helper-remaining"></div>
+    </div>
+    <div id="strikle-helper-db">
+      <button id="strikle-db-update" title="猜不到选手时，一键从官方重新抓取选手数据库">
+        ⟳ 更新选手库
+      </button>
+      <span id="strikle-db-status"></span>
+    </div>
+    <div id="strikle-helper-meme" title="点击复制 · 来自 sb6657.cn 玩机器直播间">
+      <span id="strikle-meme-icon">🎤</span>
+      <span id="strikle-meme-text">6657 烂梗加载中…</span>
+      <button id="strikle-meme-refresh" title="换一条">⟳</button>
     </div>
   `;
   shadow.appendChild(panel);
@@ -101,8 +118,12 @@
   }
 
   panel.addEventListener("click", (event) => {
-    if (event.target.id === "strikle-mode-assist") setMode("assist");
-    else if (event.target.id === "strikle-mode-auto") setMode("auto");
+    const id = event.target.id || (event.target.closest("button") || {}).id;
+    if (id === "strikle-mode-assist") setMode("assist");
+    else if (id === "strikle-mode-auto") setMode("auto");
+    else if (id === "strikle-db-update") updateDatabase();
+    else if (id === "strikle-meme-refresh") loadMeme();
+    else if (event.target.closest("#strikle-helper-meme")) copyMeme();
   });
 
   function setMode(newMode) {
@@ -162,6 +183,128 @@
     });
     window.postMessage({ __strikleSend: true, data: payload }, "*");
     awaitingResult = true;
+  }
+
+  // ---- 手动更新选手数据库 ---- //
+  // 当出现「猜不到的新选手」时，用户点一下就从官方 API 重新抓全量选手，
+  // 结果存进 chrome.storage.local，之后长期生效（下次进房自动读新库）。
+  const STORAGE_KEY = "players_data";
+  const API_PLAYERS = "https://api.blast.tv/v1/counterstrikle/multiplayer/players?difficulty=pro";
+  const API_GUESSES = "https://api.blast.tv/v1/counterstrikle/guesses";
+  let updating = false;
+
+  function setDbStatus(text, kind = "") {
+    const el = panel.querySelector("#strikle-db-status");
+    if (el) {
+      el.textContent = text;
+      el.className = kind; // "" | "ok" | "err" | "busy"
+    }
+  }
+
+  // 抓单个选手详情，抽取与 players_data.json 一致的字段
+  async function fetchPlayerDetail(id) {
+    const res = await fetch(API_GUESSES, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playerId: id, timestamp: new Date().toISOString() }),
+    });
+    if (!res.ok) throw new Error(`guesses ${res.status}`);
+    const d = await res.json();
+    return {
+      id: d.id,
+      nickname: d.nickname,
+      firstName: d.firstName,
+      lastName: d.lastName,
+      isRetired: d.isRetired,
+      nationality: d.nationality ? d.nationality.value : null,
+      team: d.team && d.team.data ? d.team.data.name : null,
+      age: d.age ? d.age.value : null,
+      majorAppearances: d.majorAppearances ? d.majorAppearances.value : null,
+      role: d.role ? d.role.value : null,
+    };
+  }
+
+  async function updateDatabase() {
+    if (updating) return;
+    updating = true;
+    const btn = panel.querySelector("#strikle-db-update");
+    if (btn) btn.disabled = true;
+
+    try {
+      setDbStatus("获取列表…", "busy");
+      const listRes = await fetch(API_PLAYERS, { headers: { Accept: "application/json" } });
+      if (!listRes.ok) throw new Error(`players ${listRes.status}`);
+      const list = await listRes.json();
+
+      // 按 id 去重
+      const ids = [...new Set(list.map((p) => p.id).filter(Boolean))];
+      const total = ids.length;
+      if (!total) throw new Error("空列表");
+
+      // 小批量并发 + 批间停顿，既快又不至于触发限流
+      const BATCH = 6;
+      const players = [];
+      for (let i = 0; i < total; i += BATCH) {
+        const chunk = ids.slice(i, i + BATCH);
+        const results = await Promise.allSettled(chunk.map(fetchPlayerDetail));
+        for (const r of results) {
+          if (r.status === "fulfilled" && r.value.id) players.push(r.value);
+        }
+        setDbStatus(`抓取中 ${Math.min(i + BATCH, total)}/${total}`, "busy");
+        if (i + BATCH < total) await new Promise((r) => setTimeout(r, 250));
+      }
+
+      if (!players.length) throw new Error("未抓到任何选手");
+
+      await chrome.storage.local.set({ [STORAGE_KEY]: players });
+      analyzer = new CSPlayerAnalyzer(players); // 立即热更新当前分析器
+      setDbStatus(`✓ 已更新 ${players.length} 人`, "ok");
+    } catch (err) {
+      setDbStatus(`✗ 更新失败：${err.message}`, "err");
+    } finally {
+      updating = false;
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // ---- 玩机器直播间烂梗（联动 sb6657.cn，纯彩蛋，失败静默） ---- //
+  const MEME_URL = "https://hguofichp.cn:10086/machine/getRandOne";
+  let currentMeme = "";
+  let memeLoading = false;
+
+  async function loadMeme() {
+    if (memeLoading) return;
+    memeLoading = true;
+    const textEl = panel.querySelector("#strikle-meme-text");
+    try {
+      const res = await fetch(MEME_URL, { headers: { Accept: "application/json" } });
+      const json = await res.json();
+      const barrage = json && json.data ? json.data.barrage : "";
+      if (barrage) {
+        currentMeme = barrage;
+        if (textEl) textEl.textContent = barrage;
+      } else if (textEl) {
+        textEl.textContent = "暂时没抢到烂梗";
+      }
+    } catch {
+      if (textEl) textEl.textContent = "烂梗加载失败";
+    } finally {
+      memeLoading = false;
+    }
+  }
+
+  function copyMeme() {
+    if (!currentMeme) return;
+    const iconEl = panel.querySelector("#strikle-meme-icon");
+    const done = () => {
+      if (!iconEl) return;
+      const prev = iconEl.textContent;
+      iconEl.textContent = "✅";
+      setTimeout(() => { iconEl.textContent = prev; }, 900);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(currentMeme).then(done, () => {});
+    }
   }
 
   function handleState(state) {
@@ -227,14 +370,32 @@
     if (data && "phase" in data) handleState(data);
   });
 
-  fetch(chrome.runtime.getURL("players_data.json"))
-    .then((res) => res.json())
-    .then((players) => {
-      analyzer = new CSPlayerAnalyzer(players);
-      if (pendingState) {
-        const state = pendingState;
-        pendingState = null;
-        handleState(state);
+  // 加载选手库：优先用户手动更新过的 chrome.storage.local，其次回落内置 JSON
+  async function loadPlayers() {
+    try {
+      const stored = await chrome.storage.local.get(STORAGE_KEY);
+      if (Array.isArray(stored[STORAGE_KEY]) && stored[STORAGE_KEY].length) {
+        return { players: stored[STORAGE_KEY], source: "local" };
       }
-    });
+    } catch {
+      /* storage 不可用则回落 */
+    }
+    const res = await fetch(chrome.runtime.getURL("players_data.json"));
+    return { players: await res.json(), source: "bundled" };
+  }
+
+  loadPlayers().then(({ players, source }) => {
+    analyzer = new CSPlayerAnalyzer(players);
+    setDbStatus(
+      source === "local" ? `已加载本地库 ${players.length} 人` : `内置库 ${players.length} 人`,
+      "dim"
+    );
+    if (pendingState) {
+      const state = pendingState;
+      pendingState = null;
+      handleState(state);
+    }
+  });
+
+  loadMeme(); // 面板就绪即抓一条烂梗（失败静默）
 })();

@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Counter-Strikle 弗一把小助手",
+  "version": "3.1.0",
+  "description": "对战房间实时计算最优猜测，右上角浮层显示；支持一键手动更新选手数据库。",
+  "icons": {
+    "128": "icon.png"
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://blast.tv/*",
+    "https://api.blast.tv/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://blast.tv/counter-strikle/multiplayer",
+        "https://blast.tv/counter-strikle/multiplayer/*"
+      ],
+      "js": ["ws_hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://blast.tv/counter-strikle/multiplayer",
+        "https://blast.tv/counter-strikle/multiplayer/*"
+      ],
+      "js": ["analyzer.js", "content_script.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["players_data.json", "panel.css", "icon.png"],
+      "matches": ["https://blast.tv/*"]
+    }
+  ]
+}

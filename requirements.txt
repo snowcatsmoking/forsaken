@@ -1,6 +1,5 @@
-flask>=3.1,<4
-flask-cors>=5.0,<6
+# 每日挑战终端求解器（solver/）依赖。浏览器插件为纯前端，无需任何依赖。
 pandas>=2.2,<3
 numpy>=1.26,<2
 openpyxl>=3.1,<4
-requests>=2.32,<3 
+requests>=2.32,<3

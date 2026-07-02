@@ -1,19 +1,26 @@
+import os
+from typing import Dict, Optional
+
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional
+
+# 默认选手数据库：solver/data/players_pro.xlsx（pro 难度，每日挑战用）
+DEFAULT_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "players_pro.xlsx")
 
 
 class CSPlayerAnalyzer:
     """
-    CS:GO选手分析器
-    核心算法实现，负责选手数据分析和猜测逻辑
+    CS:GO 选手分析器
+
+    核心算法：基于信息熵，每一步选出期望信息增益最大的选手作为下一次猜测，
+    并根据官方逐属性反馈持续收敛候选集合。
     """
-    def __init__(self, excel_path: str):
+    def __init__(self, excel_path: str = DEFAULT_DATA_PATH):
         """
         初始化分析器
 
         Args:
-            excel_path: 选手数据Excel文件路径
+            excel_path: 选手数据 Excel 文件路径，默认使用内置 pro 数据库
         """
         self.df = pd.read_excel(excel_path)
         self.possible_players = self.df.copy()
@@ -49,7 +56,9 @@ class CSPlayerAnalyzer:
                 else:
                     if value['result'] == 'CORRECT':
                         mask &= (self.possible_players[key] == value['value'])
-                    elif value['result'] == 'INCORRECT':
+                    elif value['result'] in ('INCORRECT', 'INCORRECT_CLOSE'):
+                        # 官方对 nationality 常返回 INCORRECT_CLOSE（同大洲/邻国），
+                        # 语义等同于「不是这个值」，同样要过滤，否则会白白丢掉这条信息。
                         mask &= (self.possible_players[key] != value['value'])
                     elif value['result'] == 'HIGH_NOT_CLOSE':
                         mask &= (self.possible_players[key] < value['value'])

@@ -1,12 +1,13 @@
+import os
+import time
+import random
+from typing import Dict, List
+from datetime import datetime
+
 import requests
 import pandas as pd
-from typing import Dict, List
-import time
-from datetime import datetime
-import json
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
-import random
 
 class CSPlayerScraper:
     def __init__(self):
@@ -131,11 +132,13 @@ class CSPlayerScraper:
             print("未获取到任何选手详细信息！")
             return
             
-        # 转换为DataFrame并保存为Excel
+        # 转换为DataFrame并保存到 solver/data/players_pro.xlsx（求解器默认读取路径）
         df = pd.DataFrame(player_details)
-        excel_filename = "cs_player_pro.xlsx"
-        df.to_excel(excel_filename, index=False)
-        print(f"数据已保存到: {excel_filename}")
+        out_dir = os.path.join(os.path.dirname(__file__), "data")
+        os.makedirs(out_dir, exist_ok=True)
+        excel_path = os.path.join(out_dir, "players_pro.xlsx")
+        df.to_excel(excel_path, index=False)
+        print(f"数据已保存到: {excel_path}")
         print(f"共保存 {len(player_details)} 名选手的详细信息")
 
 if __name__ == "__main__":
