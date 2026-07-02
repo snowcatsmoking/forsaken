@@ -2,7 +2,7 @@
 
 <img src="extension/icon.png" width="96" alt="玩机器 machine" />
 
-# Counter-Strikle 弗一把小助手
+# Counter-Strike 弗一把小助手
 
 基于信息熵的 [BLAST Counter-Strikle](https://blast.tv/counter-strikle) 智能猜测工具。
 
